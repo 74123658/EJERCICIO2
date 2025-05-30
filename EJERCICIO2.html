@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Tickets de Café - Exportación de Café S.A. de C.V.</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" xintegrity="sha512-SnH5WK+bZxgPHs44uWIX+LLJAJ9/2PkPKZ5QiAj6Ta86w+fsb2TkcmfRyVX3pBnMFcV7oQPJkl9QevSCWr3W6A==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import {
+            getAuth,
+            signInWithEmailAndPassword,
+            createUserWithEmailAndPassword,
+            sendPasswordResetEmail,
+            signOut,
+            onAuthStateChanged,
+            signInWithCustomToken,
+            // signInAnonymously // Removed as it's causing admin-restricted-operation error and is not strictly needed for this app's explicit auth flow
+        } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import {
+            getFirestore,
+            collection,
+            addDoc,
+            getDocs,
+            deleteDoc,
+            doc,
+            onSnapshot,
+            query
+        } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // Firebase Configuration (provided by the user)
+        const firebaseConfig = {
+            apiKey: "AIzaSyCOqHIoR0RUWtyBdgQsh2gxB53fgsniD_I",
+            authDomain: "ejercicio-2-36ce4.firebaseapp.com",
+            projectId: "ejercicio-2-36ce4",
+            storageBucket: "ejercicio-2-36ce4.firebasestorage.app",
+            messagingSenderId: "733823714764",
+            appId: "1:733823714764:web:b3fe2d2536ab2061a1c969",
+            measurementId: "G-DHJJNT6NNG"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Global variables for Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // The __initial_auth_token is handled by the Canvas environment internally for initial sign-in.
+        // We no longer explicitly call signInWithCustomToken with it here to avoid potential conflicts.
+        // The onAuthStateChanged listener will reflect the result of the Canvas's internal sign-in.
+
+        let currentUserId = null;
+        let ticketsCollectionRef = null;
+        let priorityChart = null; // Variable para almacenar la instancia del gráfico
+
+        // Referencias a elementos del DOM
+        const loginSection = document.getElementById('login-section');
+        const appSection = document.getElementById('app-section');
+        const loginForm = document.getElementById('login-form');
+        const registerForm = document.getElementById('register-form');
+        const forgotPasswordForm = document.getElementById('forgot-password-form');
+        const ticketForm = document.getElementById('ticket-form');
+        const ticketsList = document.getElementById('tickets-list');
+        const messageDisplay = document.getElementById('message-display');
+        const currentUserDisplay = document.getElementById('current-user-display');
+
+        // Función para mostrar mensajes al usuario
+        function showMessage(message, type = 'info') {
+            messageDisplay.innerHTML = `<div class="alert alert-${type}" role="alert">${message}</div>`;
+            setTimeout(() => {
+                messageDisplay.innerHTML = '';
+            }, 5000); // Ocultar el mensaje después de 5 segundos
+        }
+
+        // --- Autenticación de Usuarios ---
+
+        // Listener para cambios en el estado de autenticación
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUserId = user.uid;
+                currentUserDisplay.textContent = `Usuario: ${currentUserId}`;
+                // Set the collection reference for the current user's tickets
+                ticketsCollectionRef = collection(db, `artifacts/${appId}/users/${currentUserId}/tickets`);
+                loginSection.classList.add('d-none');
+                appSection.classList.remove('d-none');
+                await loadTickets(); // Cargar tickets al iniciar sesión
+            } else {
+                currentUserId = null;
+                currentUserDisplay.textContent = '';
+                ticketsCollectionRef = null;
+                appSection.classList.add('d-none');
+                loginSection.classList.remove('d-none');
+                // Removed the signInAnonymously call as it was causing auth/admin-restricted-operation error
+                // The app relies on explicit email/password login/registration.
+            }
+        });
+
+        // Manejo del Login
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = loginForm['login-email'].value;
+            const password = loginForm['login-password'].value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                showMessage('Inicio de sesión exitoso.', 'success');
+                loginForm.reset();
+            } catch (error) {
+                console.error("Error de inicio de sesión:", error);
+                showMessage(`Error de inicio de sesión: ${error.message}`, 'danger');
+            }
+        });
+
+        // Manejo del Registro
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = registerForm['register-email'].value;
+            const password = registerForm['register-password'].value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                showMessage('Registro exitoso. ¡Bienvenido!', 'success');
+                registerForm.reset();
+                // Optional: Redirect to login section or directly to the app
+                document.getElementById('login-link').click(); // Simulate click on login link
+            } catch (error) {
+                console.error("Error de registro:", error);
+                showMessage(`Error de registro: ${error.message}`, 'danger');
+            }
+        });
+
+        // Manejo de Recuperación de Contraseña
+        forgotPasswordForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = forgotPasswordForm['forgot-email'].value;
+            try {
+                await sendPasswordResetEmail(auth, email);
+                showMessage('Se ha enviado un correo de recuperación de contraseña a tu email.', 'info');
+                forgotPasswordForm.reset();
+                document.getElementById('login-link').click(); // Simulate click on login link
+            } catch (error) {
+                console.error("Error al enviar correo de recuperación:", error);
+                showMessage(`Error al recuperar contraseña: ${error.message}`, 'danger');
+            }
+        });
+
+        // Manejo del Logout
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            try {
+                await signOut(auth);
+                showMessage('Sesión cerrada exitosamente.', 'info');
+            } catch (error) {
+                console.error("Error al cerrar sesión:", error);
+                showMessage(`Error al cerrar sesión: ${error.message}`, 'danger');
+            }
+        });
+
+        // --- Gestión de Tickets ---
+
+        // Generar Folio Automático
+        async function generateTicketFolio() {
+            try {
+                const q = query(ticketsCollectionRef);
+                const querySnapshot = await getDocs(q);
+                const count = querySnapshot.size;
+                return `COFFEE-${String(count + 1).padStart(3, '0')}`;
+            } catch (error) {
+                console.error("Error al generar folio:", error);
+                showMessage(`Error al generar folio: ${error.message}`, 'danger');
+                return `COFFEE-${Date.now()}`; // Fallback
+            }
+        }
+
+        // Crear Ticket
+        ticketForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUserId) {
+                showMessage('Debes iniciar sesión para crear tickets.', 'warning');
+                return;
+            }
+
+            const folio = await generateTicketFolio();
+            const newTicket = {
+                folio: folio,
+                title: ticketForm['ticket-title'].value,
+                description: ticketForm['ticket-description'].value,
+                priority: ticketForm['ticket-priority'].value,
+                status: ticketForm['ticket-status'].value,
+                clientName: ticketForm['ticket-client-name'].value,
+                kilograms: parseFloat(ticketForm['ticket-kilograms'].value),
+                productType: ticketForm['ticket-product-type'].value,
+                shippingCountry: ticketForm['ticket-shipping-country'].value,
+                createdAt: new Date(),
+                createdBy: currentUserId
+            };
+
+            try {
+                await addDoc(ticketsCollectionRef, newTicket);
+                showMessage('Ticket creado exitosamente.', 'success');
+                ticketForm.reset();
+            } catch (error) {
+                console.error("Error al crear ticket:", error);
+                showMessage(`Error al crear ticket: ${error.message}`, 'danger');
+            }
+        });
+
+        // Cargar y mostrar tickets en tiempo real
+        async function loadTickets() {
+            if (!currentUserId) return;
+
+            // Limpiar tickets anteriores
+            ticketsList.innerHTML = '';
+            // Destruir gráfico anterior si existe
+            if (priorityChart) {
+                priorityChart.destroy();
+            }
+
+            // Escuchar cambios en la colección de tickets
+            onSnapshot(ticketsCollectionRef, (snapshot) => {
+                const tickets = [];
+                snapshot.forEach(doc => {
+                    tickets.push({ id: doc.id, ...doc.data() });
+                });
+                renderTickets(tickets);
+                updatePriorityChart(tickets);
+            }, (error) => {
+                console.error("Error al escuchar tickets:", error);
+                showMessage(`Error al cargar tickets: ${error.message}`, 'danger');
+            });
+        }
+
+        // Renderizar tickets en la interfaz
+        function renderTickets(tickets) {
+            ticketsList.innerHTML = ''; // Limpiar la lista antes de renderizar
+            if (tickets.length === 0) {
+                ticketsList.innerHTML = '<p class="text-center text-muted">No hay tickets disponibles.</p>';
+                return;
+            }
+
+            tickets.sort((a, b) => b.createdAt.toDate() - a.createdAt.toDate()); // Ordenar por fecha de creación descendente
+
+            tickets.forEach(ticket => {
+                const ticketCard = document.createElement('div');
+                ticketCard.className = 'col-md-6 col-lg-4 mb-4';
+                ticketCard.innerHTML = `
+                    <div class="card h-100 shadow-sm ticket-card">
+                        <div class="card-body">
+                            <h5 class="card-title text-brown">${ticket.title} <span class="badge bg-secondary">${ticket.folio}</span></h5>
+                            <h6 class="card-subtitle mb-2 text-muted">${ticket.clientName} - ${ticket.kilograms} kg</h6>
+                            <p class="card-text">${ticket.description}</p>
+                            <ul class="list-group list-group-flush mb-3">
+                                <li class="list-group-item"><strong>Prioridad:</strong> <span class="badge ${getPrior
